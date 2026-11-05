@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>Visor EDERSA - Barrios, Calles y Usuarios</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<style>
+  :root{ --bg:#f4f5f7; --panel:#ffffff; --ink:#222; --muted:#666; --line:#e2e4e8;
+         --green:#1a9850; --red:#d73027; --gray:#9aa0a6; --obra:#1a9850; --sinobra:#7a1fa2; }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;color:var(--ink)}
+  #app{display:flex;height:100vh}
+  #side{width:340px;flex:0 0 340px;background:var(--panel);border-right:1px solid var(--line);
+        overflow-y:auto;padding:14px 16px}
+  #map{flex:1}
+  h1{font-size:16px;margin:0 0 2px}
+  .sub{font-size:12px;color:var(--muted);margin-bottom:10px}
+  h2{font-size:12px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);
+     margin:18px 0 8px;border-bottom:1px solid var(--line);padding-bottom:4px}
+  label{display:flex;align-items:center;gap:8px;font-size:13px;padding:3px 0;cursor:pointer}
+  select{width:100%;font:inherit;padding:6px 8px;border:1px solid var(--line);border-radius:7px;margin:3px 0;background:#fff}
+  .swatch{width:14px;height:14px;border-radius:3px;flex:0 0 14px;border:1px solid rgba(0,0,0,.2)}
+  .dot{width:13px;height:13px;border-radius:50%;flex:0 0 13px;border:1px solid #fff;box-shadow:0 0 0 1px rgba(0,0,0,.25)}
+  .line{width:16px;height:0;border-top:3px solid;flex:0 0 16px}
+  .stats{display:flex;gap:6px;flex-wrap:wrap}
+  .stat{background:var(--bg);border-radius:8px;padding:8px 10px;flex:1;min-width:84px}
+  .stat b{font-size:18px;display:block}
+  .stat span{font-size:11px;color:var(--muted)}
+  button{font:inherit;padding:7px 10px;border:1px solid var(--line);background:#fff;border-radius:7px;cursor:pointer}
+  button:hover{background:var(--bg)}
+  button.active{background:#1f6fb2;color:#fff;border-color:#1f6fb2}
+  .row{display:flex;gap:6px}
+  .src{font-size:11px;color:var(--muted);margin-top:6px;word-break:break-all}
+  .pill{display:inline-block;font-size:11px;padding:1px 7px;border-radius:10px;color:#fff;margin-left:4px}
+  .ok{background:var(--green)} .cur{background:#e08e0b} .pend{background:var(--gray)}
+  .lp{font-size:13px;line-height:1.45}
+  .lp h3{margin:0 0 4px;font-size:14px}
+  .lp .obra{border-top:1px dashed var(--line);padding:5px 0;margin-top:5px}
+  .lp .k{color:var(--muted)}
+  #info-barrio{background:#faf7fd;border:1px solid #e7dcf3;border-radius:8px;padding:10px 12px;margin-top:8px;font-size:13px;display:none}
+  #info-barrio h3{margin:0 0 6px;font-size:14px}
+  #info-barrio table{width:100%;border-collapse:collapse}
+  #info-barrio td{padding:2px 0;vertical-align:top}
+  #info-barrio td.v{text-align:right;font-weight:600;white-space:nowrap}
+  #info-barrio .k{color:var(--muted)}
+  .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:10px;background:#eee;margin-right:4px}
+  #loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+           background:rgba(255,255,255,.9);font-size:14px;z-index:1000}
+  .leaflet-popup-content{margin:10px 12px}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="side">
+    <h1>Visor EDERSA</h1>
+    <div class="sub">Barrios · Calles con servicios · Usuarios y obras</div>
+
+    <div class="row" style="margin-bottom:8px">
+      <button id="t-mover" style="flex:1">🖐 Mover</button>
+      <button id="t-info" class="active" style="flex:1">🔎 Info (clic)</button>
+    </div>
+
+    <div id="loading">Cargando datos…</div>
+
+    <h2>Resumen</h2>
+    <div class="stats">
+      <div class="stat"><b id="st-usuarios">–</b><span>usuarios</span></div>
+      <div class="stat"><b id="st-visibles">–</b><span>visibles</span></div>
+      <div class="stat"><b id="st-conobra">–</b><span>con obra</span></div>
+    </div>
+
+    <h2>Capas</h2>
+    <label><input type="checkbox" id="lyr-barrios" checked> <span class="swatch" style="background:#8856a7;opacity:.5"></span> Barrios</label>
+    <label><input type="checkbox" id="lyr-calles" checked> <span class="line" style="border-color:#555"></span> Calles</label>
+    <label><input type="checkbox" id="lyr-usuarios" checked> <span class="dot" style="background:var(--sinobra)"></span> Usuarios</label>
+
+    <h2>Filtros</h2>
+    <select id="f-depto"><option value="">Departamento: todos</option></select>
+    <select id="f-localidad"><option value="">Localidad: todas</option></select>
+    <select id="f-barrio"><option value="">Barrio: todos</option></select>
+    <select id="f-tipo">
+      <option value="">Tipo de barrio: todos</option>
+      <option value="Duro">Duro</option>
+      <option value="Blando">Blando</option>
+      <option value="No se sabe">No se sabe</option>
+    </select>
+    <select id="f-pase">
+      <option value="">Estado PASE: todos</option>
+      <option value="No ingresó">No ingresó al PASE</option>
+      <option value="Proyectado">Proyectado</option>
+      <option value="Consolidado">Consolidado</option>
+      <option value="Implementación reciente">Implementación reciente</option>
+    </select>
+    <div class="row" style="margin-top:6px">
+      <button id="zoom-filtro" style="flex:1">⤢ Zoom al sector</button>
+      <button id="reset-filtro" style="flex:1">↺ Limpiar</button>
+    </div>
+
+    <div id="info-barrio"></div>
+
+    <h2>Calles · energía eléctrica</h2>
+    <label><span class="line" style="border-color:var(--green)"></span> Tiene red (S)</label>
+    <label><span class="line" style="border-color:var(--red)"></span> No tiene (N)</label>
+    <label><span class="line" style="border-color:var(--gray)"></span> Sin dato (-)</label>
+
+    <h2>Usuarios</h2>
+    <label><input type="radio" name="uf" value="todos" checked> Todos</label>
+    <label><input type="radio" name="uf" value="con"> <span class="dot" style="background:var(--green)"></span> Con obra</label>
+    <label><input type="radio" name="uf" value="sin"> <span class="dot" style="background:var(--sinobra)"></span> Sin obra</label>
+
+    <h2>Tipo de obra</h2>
+    <div id="tipos"></div>
+
+    <h2>Datos de obras</h2>
+    <button id="refresh">↻ Refrescar obras</button>
+    <div class="src" id="src"></div>
+  </div>
+  <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+/* ============================================================
+   CONFIG — planillas publicadas como CSV
+   ============================================================ */
+const OBRAS_URL   = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQ_Pigo6vpR9IaTeD2C5LXrpYdeZFjxierA0VVSrIkDHzHOKQ9honxJJoBWe-ADGXB_7EbAaK4d88fK/pub?output=csv";
+const BARRIOS_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTVXaguldp-dULt8TNEr0985coEztDj0hYM49TSd2HjzW_h497l8a18NtWc11ekQU53ZetYRkWXrZZd/pub?gid=0&single=true&output=csv";
+
+const COL = { green:"#1a9850", red:"#d73027", gray:"#9aa0a6", obra:"#1a9850", sinobra:"#7a1fa2" };
+
+const map = L.map("map", { preferCanvas:true }).setView([-40.8, -65.0], 7);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+  { maxZoom:19, attribution:"© OpenStreetMap" }).addTo(map);
+
+const canvas = L.canvas({ padding:0.5 });
+let obrasByUsua = {};
+let barriosById = {};
+let barriosActivos = new Set();
+let tiposSet = new Set();
+let usuariosLayer, callesLayer, barriosLayer;
+let usuariosData;
+let modoInspeccion = true;   // true = Info (clic muestra datos) · false = Mover
+let featureJustClicked = false;   // un usuario/calle respondió el clic (el barrio no pisa)
+
+/* -------- utilidades -------- */
+function parseCSV(text){
+  const rows=[]; let i=0, field="", row=[], q=false;
+  text = text.replace(/\r/g,"");
+  while(i<text.length){
+    const c=text[i];
+    if(q){ if(c==='"'){ if(text[i+1]==='"'){field+='"';i++;} else q=false; } else field+=c; }
+    else{
+      if(c==='"') q=true;
+      else if(c===',') { row.push(field); field=""; }
+      else if(c==='\n'){ row.push(field); rows.push(row); row=[]; field=""; }
+      else field+=c;
+    }
+    i++;
+  }
+  if(field.length||row.length){ row.push(field); rows.push(row); }
+  const header = rows.shift().map(h=>h.trim());
+  return rows.filter(r=>r.length>1 && r.some(v=>v.trim()!=="")).map(r=>{
+    const o={}; header.forEach((h,j)=> o[h]=(r[j]||"").trim()); return o;
+  });
+}
+function limpiarId(v){ return (v==null?"":String(v)).trim(); }
+function toIntBarrio(v){ const n=parseInt(parseFloat(v),10); return isNaN(n)?null:n; }
+function dni(v){ const n=Number(v); return isFinite(n)&&n>0 ? n.toLocaleString("es-AR") : (v||"-"); }
+function parseNum(v){ if(v==null) return 0; const s=String(v).replace(/\./g,"").replace(",",".").replace(/[^0-9.\-]/g,""); const n=parseFloat(s); return isNaN(n)?0:n; }
+function fmt(n){ return Math.round(n).toLocaleString("es-AR"); }
+function tipoNorm(v){ v=(v||"").trim(); return (v===""||v==="--")?"No se sabe":v; }
+function paseNorm(v){ v=(v||"").trim(); return (v===""||v==="-")?"No ingresó":v; }
+function estadoPill(e){
+  const s=(e||"").toLowerCase();
+  if(s.startsWith("real")) return '<span class="pill ok">Realizada</span>';
+  if(s.startsWith("en"))  return '<span class="pill cur">En curso</span>';
+  return '<span class="pill pend">'+(e||"Pendiente")+'</span>';
+}
+
+/* -------- cargar planillas -------- */
+async function cargarObras(){
+  obrasByUsua={}; tiposSet=new Set();
+  const url = OBRAS_URL + (OBRAS_URL.includes("?")?"&":"?") + "t=" + Date.now();
+  const filas = parseCSV(await (await fetch(url)).text());
+  filas.forEach(f=>{
+    const id = limpiarId(f.Usua_ID || f.usua_id || f.USUA_ID);
+    if(!id) return;
+    (obrasByUsua[id] = obrasByUsua[id] || []).push(f);
+    if(f.tipo_obra) tiposSet.add(f.tipo_obra.trim());
+  });
+  document.getElementById("src").textContent = "Obras: " + filas.length + " · Barrios: " + Object.keys(barriosById).length;
+  renderTipos();
+}
+async function cargarBarrios(){
+  barriosById={};
+  try{
+    const txt = await (await fetch(BARRIOS_URL)).text();
+    const sinBanner = txt.slice(txt.indexOf("\n")+1);
+    parseCSV(sinBanner).forEach(f=>{
+      const id = toIntBarrio(f["id renabap"]);
+      if(id!=null) barriosById[id]=f;
+    });
+  }catch(e){ console.warn("Tabla de barrios:", e); }
+}
+function renderTipos(){
+  const cont=document.getElementById("tipos"); cont.innerHTML="";
+  [...tiposSet].sort().forEach(t=>{
+    const l=document.createElement("label");
+    l.innerHTML='<input type="checkbox" class="tipo" value="'+t+'" checked> '+t;
+    cont.appendChild(l);
+  });
+  cont.querySelectorAll(".tipo").forEach(c=>c.addEventListener("change",aplicarFiltros));
+}
+
+/* -------- selectores de ubicación (cascada) -------- */
+function infoBarriosConUsuarios(){
+  const ids=new Set(usuariosData.features.map(f=>toIntBarrio(f.properties.id_renabap)));
+  const arr=[]; ids.forEach(id=>{ if(id!=null&&barriosById[id]) arr.push(barriosById[id]); });
+  return arr;
+}
+function opt(val,txt){ const o=document.createElement("option"); o.value=val; o.textContent=txt; return o; }
+function poblarUbicacion(){
+  const info=infoBarriosConUsuarios();
+  const dSel=document.getElementById("f-depto"), lSel=document.getElementById("f-localidad"), bSel=document.getElementById("f-barrio");
+  const dep=dSel.value, loc=lSel.value, bar=bSel.value;
+  const deps=[...new Set(info.map(b=>(b.departamento||"").trim()).filter(Boolean))].sort();
+  dSel.innerHTML=""; dSel.appendChild(opt("","Departamento: todos"));
+  deps.forEach(d=>dSel.appendChild(opt(d,d))); dSel.value=deps.includes(dep)?dep:"";
+  const locs=[...new Set(info.filter(b=>!dSel.value||b.departamento===dSel.value).map(b=>(b.localidad||"").trim()).filter(Boolean))].sort();
+  lSel.innerHTML=""; lSel.appendChild(opt("","Localidad: todas"));
+  locs.forEach(l=>lSel.appendChild(opt(l,l))); lSel.value=locs.includes(loc)?loc:"";
+  const brs=info.filter(b=>(!dSel.value||b.departamento===dSel.value)&&(!lSel.value||b.localidad===lSel.value))
+                .map(b=>({id:toIntBarrio(b["id renabap"]), nombre:(b["nombre del barrio"]||("Barrio "+b["id renabap"]))}))
+                .sort((a,b)=>a.nombre.localeCompare(b.nombre));
+  bSel.innerHTML=""; bSel.appendChild(opt("","Barrio: todos"));
+  brs.forEach(b=>bSel.appendChild(opt(String(b.id),b.nombre)));
+  if([...bSel.options].some(o=>o.value===bar)) bSel.value=bar;
+}
+
+/* -------- filtro maestro -------- */
+function calcularBarriosActivos(){
+  const dep=document.getElementById("f-depto").value, loc=document.getElementById("f-localidad").value,
+        bar=document.getElementById("f-barrio").value, tipo=document.getElementById("f-tipo").value, pase=document.getElementById("f-pase").value;
+  barriosActivos=new Set();
+  for(const [id,b] of Object.entries(barriosById)){
+    if(dep && (b.departamento||"")!==dep) continue;
+    if(loc && (b.localidad||"")!==loc) continue;
+    if(bar && String(id)!==String(bar)) continue;
+    if(tipo && tipoNorm(b["Tipo de barrio"])!==tipo) continue;
+    if(pase && paseNorm(b["Situacion PASE"])!==pase) continue;
+    barriosActivos.add(parseInt(id,10));
+  }
+}
+function hayFiltro(){ return ["f-depto","f-localidad","f-barrio","f-tipo","f-pase"].some(i=>document.getElementById(i).value!==""); }
+
+/* -------- capas + popups -------- */
+function estiloCalle(f){
+  const e=(f.properties.energia_electrica||"").toUpperCase();
+  return { color: e==="S"?COL.green : e==="N"?COL.red : COL.gray, weight:2, opacity:0.9 };
+}
+function popupCalle(f){
+  const p=f.properties, si=v=>v==="S"?"Sí":v==="N"?"No":"-";
+  return '<div class="lp"><h3>Calle #'+(p.id??"")+'</h3><b>Energía: '+si(p.energia_electrica)+'</b><br>'
+    +'<span class="k">Agua:</span> '+si(p.red_agua)+' · <span class="k">Cloacas:</span> '+si(p.cloacas)+'<br>'
+    +'<span class="k">Gas:</span> '+si(p.red_gas)+' · <span class="k">Alumbrado:</span> '+si(p.alumbrado)+'<br>'
+    +'<span class="k">Asfalto:</span> '+si(p.asfalto)+' · <span class="k">Veredas:</span> '+si(p.veredas)+'</div>';
+}
+function colorUsuario(id){ return obrasByUsua[id]&&obrasByUsua[id].length ? COL.obra : COL.sinobra; }
+function popupUsuario(f){
+  const p=f.properties, id=limpiarId(p.Usua_ID), b=barriosById[toIntBarrio(p.id_renabap)];
+  const barrio=b?(b["nombre del barrio"]||("Barrio "+toIntBarrio(p.id_renabap))):("Barrio "+(toIntBarrio(p.id_renabap)??"-"));
+  const depto=b?(b.departamento||"-"):"-", loc=b?(b.localidad||"-"):"-";
+  const obras=obrasByUsua[id]||[];
+  const dniTxt = (p.DOC_N__!=null && String(p.DOC_N__).trim()!=="") ? '<span class="k">DNI:</span> '+dni(p.DOC_N__)+'<br>' : '';
+  let h='<div class="lp"><h3>'+id+'</h3>'+dniTxt
+    +'<span class="k">Barrio:</span> '+barrio+'<br><span class="k">Depto:</span> '+depto+' · <span class="k">Localidad:</span> '+loc+'<br>';
+  if(obras.length){
+    h+='<b>'+obras.length+' obra(s):</b>';
+    obras.forEach(o=>{ h+='<div class="obra"><b>'+(o.tipo_obra||"-")+'</b> '+estadoPill(o.estado)
+      +'<br><span class="k">Fecha:</span> '+(o.fecha||"-")+'<br><span class="k">Detalle:</span> '+(o.detalle||"-")
+      +'<br><span class="k">Responsable:</span> '+(o.responsable||"-")+'</div>'; });
+  } else h+='<i>Sin obras cargadas</i>';
+  return h+'</div>';
+}
+function popupBarrio(f){
+  const id=toIntBarrio(f.properties.Name), b=barriosById[id];
+  const nombre = b?(b["nombre del barrio"]||("Barrio "+id)) : (f.properties.nombre_bar||("Barrio "+id));
+  if(!b) return '<div class="lp"><h3>'+nombre+'</h3><i>Sin datos en la tabla</i></div>';
+  const tot=parseNum(b["mts lineales totales"]), con=parseNum(b["mts con red"]), pct=tot>0?100*con/tot:0;
+  return '<div class="lp"><h3>'+nombre+'</h3>'
+    +'<div style="margin-bottom:6px"><span class="tag">'+tipoNorm(b["Tipo de barrio"])+'</span><span class="tag">PASE: '+paseNorm(b["Situacion PASE"])+'</span></div>'
+    +'<span class="k">Depto:</span> '+(b.departamento||"-")+' · <span class="k">Localidad:</span> '+(b.localidad||"-")+'<br>'
+    +'<span class="k">Mts totales:</span> '+fmt(tot)+'<br>'
+    +'<span class="k">Mts con red:</span> '+fmt(con)+' ('+pct.toFixed(0)+'%)<br>'
+    +'<span class="k">Mts sin red:</span> '+fmt(parseNum(b["mts sin red"]))+'<br>'
+    +'<span class="k">Viviendas:</span> '+fmt(parseNum(b["viviendas"]))+' · <span class="k">sin red:</span> '+fmt(parseNum(b["viviendas sin red"]))+'<br>'
+    +'<span class="k">Usuarios:</span> '+fmt(parseNum(b["Usuarios en el barrio"]))+' · <span class="k">sin medidor:</span> '+fmt(parseNum(b["Usuarios sin medidor en el barrio"]))+'</div>';
+}
+function clickInfo(contentFn){
+  return function(ev){
+    if(!modoInspeccion) return;
+    const lyr=ev.target;
+    if(lyr.options && lyr.options.opacity===0) return;   // oculto por filtro -> dejar pasar al barrio
+    featureJustClicked=true;
+    L.popup().setLatLng(ev.latlng).setContent(contentFn(lyr.feature)).openOn(map);
+  };
+}
+/* los poligonos en canvas no reciben clic en Leaflet -> detectamos el barrio a mano */
+function puntoEnAnillo(x,y,ring){
+  let c=false;
+  for(let i=0,j=ring.length-1;i<ring.length;j=i++){
+    const xi=ring[i][0],yi=ring[i][1],xj=ring[j][0],yj=ring[j][1];
+    if(((yi>y)!==(yj>y)) && (x < (xj-xi)*(y-yi)/(yj-yi)+xi)) c=!c;
+  }
+  return c;
+}
+function barrioEnPunto(ll){
+  if(!barriosLayer || !map.hasLayer(barriosLayer)) return null;
+  let found=null;
+  barriosLayer.eachLayer(l=>{
+    if(found!=null) return;
+    if(!l.getBounds().contains(ll)) return;
+    const g=l.feature.geometry, polys = g.type==='Polygon'?[g.coordinates]:g.coordinates;
+    for(const poly of polys){ if(puntoEnAnillo(ll.lng,ll.lat,poly[0])){ found=toIntBarrio(l.feature.properties.Name); break; } }
+  });
+  return found;
+}
+
+function construirUsuarios(){
+  if(usuariosLayer) usuariosLayer.remove();
+  usuariosLayer = L.geoJSON(usuariosData, {
+    renderer:canvas,
+    pointToLayer:(f,ll)=>L.circleMarker(ll,{renderer:canvas,radius:6,color:"#fff",weight:1,fillColor:colorUsuario(limpiarId(f.properties.Usua_ID)),fillOpacity:0.95}),
+    onEachFeature:(f,l)=>l.on("click", clickInfo(popupUsuario))
+  }).addTo(map);
+  actualizarResumen();
+  aplicarFiltros();
+}
+
+/* -------- obra filter helper -------- */
+function pasaObra(props){
+  const id=limpiarId(props.Usua_ID), obras=obrasByUsua[id]||[], tiene=obras.length>0;
+  const modo=document.querySelector('input[name="uf"]:checked').value;
+  if(modo==="sin") return !tiene;
+  if(!tiene) return modo!=="con";
+  const tipos=new Set([...document.querySelectorAll(".tipo:checked")].map(c=>c.value));
+  if(tipos.size===0) return false;
+  return obras.some(o=>tipos.has((o.tipo_obra||"").trim()));
+}
+
+/* -------- aplicar filtros a TODAS las capas -------- */
+function aplicarFiltros(){
+  calcularBarriosActivos();
+  const filtro=hayFiltro();
+  let visibles=0;
+  if(usuariosLayer) usuariosLayer.eachLayer(lyr=>{
+    const p=lyr.feature.properties, id=limpiarId(p.Usua_ID);
+    const enSector = !filtro || barriosActivos.has(toIntBarrio(p.id_renabap));
+    const vis = enSector && pasaObra(p);
+    if(vis) visibles++;
+    lyr.setStyle({fillColor:colorUsuario(id), opacity:vis?1:0, fillOpacity:vis?0.95:0});
+    lyr.setRadius(vis?6:0);
+  });
+  if(callesLayer) callesLayer.eachLayer(lyr=>{
+    let ids=lyr.feature.properties.id_renabap; if(!Array.isArray(ids)) ids=[ids];
+    const vis = !filtro || ids.some(x=>barriosActivos.has(toIntBarrio(x)));
+    lyr.setStyle({opacity:vis?0.9:0});
+  });
+  if(barriosLayer) barriosLayer.eachLayer(lyr=>{
+    const nid=toIntBarrio(lyr.feature.properties.Name);
+    const vis = !filtro || barriosActivos.has(nid);
+    lyr.setStyle({opacity:vis?1:0, fillOpacity:vis?0.12:0});
+  });
+  document.getElementById("st-visibles").textContent=visibles.toLocaleString("es-AR");
+  actualizarInfoBarrio(visibles);
+}
+
+/* -------- panel info del barrio / sector (siempre visible) -------- */
+function actualizarInfoBarrio(usuariosVisibles){
+  const cont=document.getElementById("info-barrio");
+  const ids=[...barriosActivos];
+  if(ids.length===0){ cont.style.display="none"; cont.innerHTML=""; return; }
+  const S={viv:0,vivSR:0,mts:0,mtsCon:0,mtsSin:0,usu:0,usuSM:0};
+  ids.forEach(id=>{ const b=barriosById[id]; if(!b) return;
+    S.viv+=parseNum(b["viviendas"]); S.vivSR+=parseNum(b["viviendas sin red"]);
+    S.mts+=parseNum(b["mts lineales totales"]); S.mtsCon+=parseNum(b["mts con red"]); S.mtsSin+=parseNum(b["mts sin red"]);
+    S.usu+=parseNum(b["Usuarios en el barrio"]); S.usuSM+=parseNum(b["Usuarios sin medidor en el barrio"]);
+  });
+  const pctRed = S.mts>0 ? (100*S.mtsCon/S.mts) : 0;
+  let titulo, sub="";
+  if(ids.length===1){
+    const b=barriosById[ids[0]];
+    titulo=b["nombre del barrio"]||("Barrio "+ids[0]);
+    sub='<div style="margin:2px 0 8px"><span class="tag">'+tipoNorm(b["Tipo de barrio"])+'</span><span class="tag">PASE: '+paseNorm(b["Situacion PASE"])+'</span></div>'
+       +'<div class="k" style="margin-bottom:6px">'+(b.departamento||"")+' · '+(b.localidad||"")+'</div>';
+  } else if(!hayFiltro()){
+    titulo="Todos los barrios ("+ids.length+")";
+  } else {
+    titulo=ids.length+" barrios seleccionados";
+  }
+  cont.innerHTML='<h3>'+titulo+'</h3>'+sub+'<table>'
+    +'<tr><td class="k">Mts lineales totales</td><td class="v">'+fmt(S.mts)+'</td></tr>'
+    +'<tr><td class="k">Mts con red</td><td class="v">'+fmt(S.mtsCon)+' ('+pctRed.toFixed(0)+'%)</td></tr>'
+    +'<tr><td class="k">Mts sin red</td><td class="v">'+fmt(S.mtsSin)+'</td></tr>'
+    +'<tr><td class="k">Viviendas</td><td class="v">'+fmt(S.viv)+'</td></tr>'
+    +'<tr><td class="k">Viviendas sin red</td><td class="v">'+fmt(S.vivSR)+'</td></tr>'
+    +'<tr><td class="k">Usuarios en el barrio</td><td class="v">'+fmt(S.usu)+'</td></tr>'
+    +'<tr><td class="k">Usuarios sin medidor</td><td class="v">'+fmt(S.usuSM)+'</td></tr>'
+    +'<tr><td class="k">Usuarios visibles (mapa)</td><td class="v">'+fmt(usuariosVisibles)+'</td></tr>'
+    +'</table>';
+  cont.style.display="block";
+}
+
+function actualizarResumen(){
+  let con=0;
+  usuariosData.features.forEach(f=>{ const id=limpiarId(f.properties.Usua_ID); if(obrasByUsua[id]&&obrasByUsua[id].length) con++; });
+  document.getElementById("st-usuarios").textContent=usuariosData.features.length.toLocaleString("es-AR");
+  document.getElementById("st-conobra").textContent=con.toLocaleString("es-AR");
+}
+
+/* -------- zoom al sector -------- */
+function zoomAlSector(){
+  let b=null;
+  if(barriosLayer) barriosLayer.eachLayer(l=>{
+    if(!hayFiltro() || barriosActivos.has(toIntBarrio(l.feature.properties.Name))){
+      const bb=l.getBounds(); b = b?b.extend(bb):L.latLngBounds(bb.getSouthWest(),bb.getNorthEast());
+    }
+  });
+  if(!b && usuariosLayer){ const pts=[]; usuariosLayer.eachLayer(l=>{ if(l.options.opacity!==0) pts.push(l.getLatLng()); }); if(pts.length) b=L.latLngBounds(pts); }
+  if(b) map.fitBounds(b,{padding:[30,30],maxZoom:17});
+}
+
+/* -------- toggle Mover / Info -------- */
+function setModo(info){
+  modoInspeccion=info;
+  document.getElementById("t-info").classList.toggle("active",info);
+  document.getElementById("t-mover").classList.toggle("active",!info);
+  map.getContainer().style.cursor = info ? "default" : "grab";
+  if(!info) map.closePopup();
+}
+
+function bindToggle(id,getLayer){
+  document.getElementById(id).addEventListener("change",e=>{ const l=getLayer(); if(!l) return; if(e.target.checked) l.addTo(map); else l.remove(); });
+}
+
+/* -------- arranque -------- */
+async function init(){
+  const [barrios, calles, usuarios] = await Promise.all([
+    fetch("data/barrios.geojson").then(r=>r.json()),
+    fetch("data/calles.geojson").then(r=>r.json()),
+    fetch("data/usuarios.geojson").then(r=>r.json())
+  ]);
+  usuariosData=usuarios;
+  barriosLayer=L.geoJSON(barrios,{renderer:canvas,style:{color:"#8856a7",weight:1,fillColor:"#8856a7",fillOpacity:0.12},
+                 onEachFeature:(f,l)=>l.on("click", clickInfo(popupBarrio))}).addTo(map);
+  callesLayer =L.geoJSON(calles,{renderer:canvas,style:estiloCalle,
+                 onEachFeature:(f,l)=>l.on("click", clickInfo(popupCalle))}).addTo(map);
+
+  await cargarBarrios();
+  await cargarObras();
+  poblarUbicacion();
+  construirUsuarios();
+  try{ map.fitBounds(barriosLayer.getBounds(),{padding:[20,20]}); }catch(e){}
+
+  bindToggle("lyr-barrios",()=>barriosLayer);
+  bindToggle("lyr-calles",()=>callesLayer);
+  bindToggle("lyr-usuarios",()=>usuariosLayer);
+  document.querySelectorAll('input[name="uf"]').forEach(r=>r.addEventListener("change",aplicarFiltros));
+  document.getElementById("f-depto").addEventListener("change",()=>{ poblarUbicacion(); aplicarFiltros(); });
+  document.getElementById("f-localidad").addEventListener("change",()=>{ poblarUbicacion(); aplicarFiltros(); });
+  document.getElementById("f-barrio").addEventListener("change",aplicarFiltros);
+  document.getElementById("f-tipo").addEventListener("change",aplicarFiltros);
+  document.getElementById("f-pase").addEventListener("change",aplicarFiltros);
+  document.getElementById("zoom-filtro").addEventListener("click",zoomAlSector);
+  document.getElementById("reset-filtro").addEventListener("click",()=>{
+    ["f-depto","f-localidad","f-barrio","f-tipo","f-pase"].forEach(i=>document.getElementById(i).value="");
+    poblarUbicacion(); aplicarFiltros();
+  });
+  document.getElementById("refresh").addEventListener("click",async()=>{ await cargarBarrios(); await cargarObras(); poblarUbicacion(); construirUsuarios(); });
+  document.getElementById("t-mover").addEventListener("click",()=>setModo(false));
+  document.getElementById("t-info").addEventListener("click",()=>setModo(true));
+  setModo(true);
+
+  // clic en barrio (poligono) via mapa, si no respondio un usuario/calle
+  map.on("click", e=>{
+    if(!modoInspeccion){ featureJustClicked=false; return; }
+    if(featureJustClicked){ featureJustClicked=false; return; }
+    const id=barrioEnPunto(e.latlng);
+    if(id!=null && (!hayFiltro() || barriosActivos.has(id)))
+      L.popup().setLatLng(e.latlng).setContent(popupBarrio({properties:{Name:id}})).openOn(map);
+  });
+
+  document.getElementById("loading").style.display="none";
+}
+init().catch(err=>{ document.getElementById("loading").textContent="Error cargando datos: "+err.message; console.error(err); });
+</script>
+</body>
+</html>
