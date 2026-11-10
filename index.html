@@ -101,9 +101,8 @@
     <div id="info-barrio"></div>
 
     <h2>Calles · energía eléctrica</h2>
-    <label><span class="line" style="border-color:var(--green)"></span> Tiene red (S)</label>
-    <label><span class="line" style="border-color:var(--red)"></span> No tiene (N)</label>
-    <label><span class="line" style="border-color:var(--gray)"></span> Sin dato (-)</label>
+    <label><span class="line" style="border-color:var(--green)"></span> Con red (Sí)</label>
+    <label><span class="line" style="border-color:var(--red)"></span> Sin red (No)</label>
 
     <h2>Usuarios</h2>
     <label><input type="radio" name="uf" value="todos" checked> Todos</label>
@@ -256,13 +255,27 @@ function calcularBarriosActivos(){
 function hayFiltro(){ return ["f-depto","f-localidad","f-barrio","f-tipo","f-pase"].some(i=>document.getElementById(i).value!==""); }
 
 /* -------- capas + popups -------- */
+/* Usa energia_efectiva (callejero con imputaciones): S=con red, N=sin red.
+   energia_electrica queda como dato original (se muestra en el popup si difiere). */
+function energiaEf(p){ return ((p.energia_efectiva||p.energia_electrica||"")+"").toUpperCase(); }
+function fuenteLabel(fu){
+  return ({ imputado_usuarios_edersa:"imputado: medidor en la calle",
+            inferido_transversal:"inferido: calle transversal",
+            inferido_perimetral:"inferido: borde de bloque servido",
+            nosesabe_a_N:"sin dato, tratado como sin red",
+            correccion_manual:"corrección manual" })[fu] || "";
+}
 function estiloCalle(f){
-  const e=(f.properties.energia_electrica||"").toUpperCase();
+  const e=energiaEf(f.properties);
   return { color: e==="S"?COL.green : e==="N"?COL.red : COL.gray, weight:2, opacity:0.9 };
 }
 function popupCalle(f){
   const p=f.properties, si=v=>v==="S"?"Sí":v==="N"?"No":"-";
-  return '<div class="lp"><h3>Calle #'+(p.id??"")+'</h3><b>Energía: '+si(p.energia_electrica)+'</b><br>'
+  const ef=energiaEf(p), fl=fuenteLabel(p.energia_fuente);
+  const orig=(p.energia_electrica||"").toUpperCase();
+  const notaOrig = (p.energia_fuente && p.energia_fuente!=="original") ? '<span class="k"> · dato original: '+si(orig)+'</span>' : '';
+  return '<div class="lp"><h3>Calle #'+(p.id??"")+'</h3><b>Energía: '+si(ef)+'</b>'
+    + (fl?'<br><span class="k">('+fl+')</span>'+notaOrig : '') +'<br>'
     +'<span class="k">Agua:</span> '+si(p.red_agua)+' · <span class="k">Cloacas:</span> '+si(p.cloacas)+'<br>'
     +'<span class="k">Gas:</span> '+si(p.red_gas)+' · <span class="k">Alumbrado:</span> '+si(p.alumbrado)+'<br>'
     +'<span class="k">Asfalto:</span> '+si(p.asfalto)+' · <span class="k">Veredas:</span> '+si(p.veredas)+'</div>';
@@ -284,17 +297,58 @@ function popupUsuario(f){
   } else h+='<i>Sin obras cargadas</i>';
   return h+'</div>';
 }
+/* -------- mts por barrio, calculados del callejero (energia_efectiva) -------- */
+let callesData, mtsBarrio={};
+function geoLen(c){
+  const A=6378137,F=1/298.257223563,B=A*(1-F); let tot=0;
+  for(let i=0;i<c.length-1;i++){
+    const lo1=c[i][0],la1=c[i][1],lo2=c[i+1][0],la2=c[i+1][1];
+    const L=(lo2-lo1)*Math.PI/180;
+    const U1=Math.atan((1-F)*Math.tan(la1*Math.PI/180)),U2=Math.atan((1-F)*Math.tan(la2*Math.PI/180));
+    const sU1=Math.sin(U1),cU1=Math.cos(U1),sU2=Math.sin(U2),cU2=Math.cos(U2);
+    let lam=L,lamP=0,it=0,ss=0,cs=0,sig=0,c2a=0,c2sm=0;
+    do{ const sl=Math.sin(lam),cl=Math.cos(lam);
+        const t1=cU2*sl,t2=cU1*sU2-sU1*cU2*cl;
+        ss=Math.sqrt(t1*t1+t2*t2); if(ss===0)break;
+        cs=sU1*sU2+cU1*cU2*cl; sig=Math.atan2(ss,cs);
+        const sa=cU1*cU2*sl/ss; c2a=1-sa*sa;
+        c2sm=c2a!==0?cs-2*sU1*sU2/c2a:0;
+        const Cc=F/16*c2a*(4+F*(4-3*c2a)); lamP=lam;
+        lam=L+(1-Cc)*F*sa*(sig+Cc*ss*(c2sm+Cc*cs*(-1+2*c2sm*c2sm)));
+    }while(Math.abs(lam-lamP)>1e-12 && ++it<100);
+    if(ss===0)continue;
+    const u2=c2a*(A*A-B*B)/(B*B);
+    const Aa=1+u2/16384*(4096+u2*(-768+u2*(320-175*u2)));
+    const Bb=u2/1024*(256+u2*(-128+u2*(74-47*u2)));
+    const ds=Bb*ss*(c2sm+Bb/4*(cs*(-1+2*c2sm*c2sm)-Bb/6*c2sm*(-3+4*ss*ss)*(-3+4*c2sm*c2sm)));
+    tot+=B*Aa*(sig-ds);
+  }
+  return tot;
+}
+function calcularMtsBarrio(calles){
+  mtsBarrio={};
+  (calles.features||[]).forEach(f=>{
+    const g=f.geometry; if(!g) return;
+    const lineas=g.type==="MultiLineString"?g.coordinates:[g.coordinates];
+    let L=0; lineas.forEach(ln=>{ L+=geoLen(ln); });
+    let ids=f.properties.id_renabap; if(!Array.isArray(ids)) ids=[ids];
+    const val=[...new Set(ids.map(x=>toIntBarrio(x)).filter(id=>id!=null && barriosById[id]))];
+    if(!val.length) return;
+    const sh=L/val.length, esS=energiaEf(f.properties)==="S";
+    val.forEach(id=>{ const m=mtsBarrio[id]||(mtsBarrio[id]={t:0,c:0,s:0}); m.t+=sh; if(esS)m.c+=sh; else m.s+=sh; });
+  });
+}
 function popupBarrio(f){
   const id=toIntBarrio(f.properties.Name), b=barriosById[id];
   const nombre = b?(b["nombre del barrio"]||("Barrio "+id)) : (f.properties.nombre_bar||("Barrio "+id));
   if(!b) return '<div class="lp"><h3>'+nombre+'</h3><i>Sin datos en la tabla</i></div>';
-  const tot=parseNum(b["mts lineales totales"]), con=parseNum(b["mts con red"]), pct=tot>0?100*con/tot:0;
+  const _m=mtsBarrio[id]||{t:0,c:0,s:0}, tot=_m.t, con=_m.c, pct=tot>0?100*con/tot:0;
   return '<div class="lp"><h3>'+nombre+'</h3>'
     +'<div style="margin-bottom:6px"><span class="tag">'+tipoNorm(b["Tipo de barrio"])+'</span><span class="tag">PASE: '+paseNorm(b["Situacion PASE"])+'</span></div>'
     +'<span class="k">Depto:</span> '+(b.departamento||"-")+' · <span class="k">Localidad:</span> '+(b.localidad||"-")+'<br>'
     +'<span class="k">Mts totales:</span> '+fmt(tot)+'<br>'
     +'<span class="k">Mts con red:</span> '+fmt(con)+' ('+pct.toFixed(0)+'%)<br>'
-    +'<span class="k">Mts sin red:</span> '+fmt(parseNum(b["mts sin red"]))+'<br>'
+    +'<span class="k">Mts sin red:</span> '+fmt(_m.s)+'<br>'
     +'<span class="k">Viviendas:</span> '+fmt(parseNum(b["viviendas"]))+' · <span class="k">sin red:</span> '+fmt(parseNum(b["viviendas sin red"]))+'<br>'
     +'<span class="k">Usuarios:</span> '+fmt(parseNum(b["Usuarios en el barrio"]))+' · <span class="k">sin medidor:</span> '+fmt(parseNum(b["Usuarios sin medidor en el barrio"]))+'</div>';
 }
@@ -385,7 +439,7 @@ function actualizarInfoBarrio(usuariosVisibles){
   const S={viv:0,vivSR:0,mts:0,mtsCon:0,mtsSin:0,usu:0,usuSM:0};
   ids.forEach(id=>{ const b=barriosById[id]; if(!b) return;
     S.viv+=parseNum(b["viviendas"]); S.vivSR+=parseNum(b["viviendas sin red"]);
-    S.mts+=parseNum(b["mts lineales totales"]); S.mtsCon+=parseNum(b["mts con red"]); S.mtsSin+=parseNum(b["mts sin red"]);
+    const _m=mtsBarrio[id]||{t:0,c:0,s:0}; S.mts+=_m.t; S.mtsCon+=_m.c; S.mtsSin+=_m.s;
     S.usu+=parseNum(b["Usuarios en el barrio"]); S.usuSM+=parseNum(b["Usuarios sin medidor en el barrio"]);
   });
   const pctRed = S.mts>0 ? (100*S.mtsCon/S.mts) : 0;
@@ -459,6 +513,7 @@ async function init(){
                  onEachFeature:(f,l)=>l.on("click", clickInfo(popupCalle))}).addTo(map);
 
   await cargarBarrios();
+  callesData=calles; calcularMtsBarrio(calles);
   await cargarObras();
   poblarUbicacion();
   construirUsuarios();
@@ -478,7 +533,7 @@ async function init(){
     ["f-depto","f-localidad","f-barrio","f-tipo","f-pase"].forEach(i=>document.getElementById(i).value="");
     poblarUbicacion(); aplicarFiltros();
   });
-  document.getElementById("refresh").addEventListener("click",async()=>{ await cargarBarrios(); await cargarObras(); poblarUbicacion(); construirUsuarios(); });
+  document.getElementById("refresh").addEventListener("click",async()=>{ await cargarBarrios(); calcularMtsBarrio(callesData); await cargarObras(); poblarUbicacion(); construirUsuarios(); });
   document.getElementById("t-mover").addEventListener("click",()=>setModo(false));
   document.getElementById("t-info").addEventListener("click",()=>setModo(true));
   setModo(true);
