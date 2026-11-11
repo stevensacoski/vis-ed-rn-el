@@ -49,6 +49,10 @@
   #loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
            background:rgba(255,255,255,.9);font-size:14px;z-index:1000}
   .leaflet-popup-content{margin:10px 12px}
+  h2.sec-h{cursor:pointer;user-select:none;display:flex;align-items:center;justify-content:space-between}
+  h2.sec-h::after{content:"▾";font-size:10px;color:var(--muted)}
+  h2.sec-h.collapsed::after{content:"▸"}
+  .sec-body{animation:none}
 </style>
 </head>
 <body>
@@ -70,13 +74,33 @@
       <div class="stat"><b id="st-visibles">–</b><span>visibles</span></div>
       <div class="stat"><b id="st-conobra">–</b><span>con obra</span></div>
     </div>
+    <div class="stats" style="margin-top:6px">
+      <div class="stat"><b id="st-med6m">–</b><span>mediana 6m (BP)</span></div>
+      <div class="stat"><b id="st-top10" style="color:#d73027">–</b><span>top 10% · <span id="st-umbral">–</span></span></div>
+    </div>
+
+    <div id="info-barrio"></div>
 
     <h2>Capas</h2>
     <label><input type="checkbox" id="lyr-barrios" checked> <span class="swatch" style="background:#8856a7;opacity:.5"></span> Barrios</label>
     <label><input type="checkbox" id="lyr-calles" checked> <span class="line" style="border-color:#555"></span> Calles</label>
     <label><input type="checkbox" id="lyr-usuarios" checked> <span class="dot" style="background:var(--sinobra)"></span> Usuarios</label>
 
-    <h2>Filtros</h2>
+    <h2>Barrios · color</h2>
+    <select id="bcolor">
+      <option value="normal">Normal (violeta)</option>
+      <option value="consumo">Consumo — top 10% de barrios en rojo</option>
+      <option value="pnt">Pérdidas no técnicas — top 10% en rojo</option>
+    </select>
+    <div id="leyenda-barrio" style="display:none">
+      <label><span class="swatch" style="background:#d73027"></span> Top 10% de barrios</label>
+      <label><span class="swatch" style="background:#fdae61"></span> Arriba de la mediana</label>
+      <label><span class="swatch" style="background:#4575b4"></span> En / por debajo de la mediana</label>
+      <label><span class="swatch" style="background:#c9ccd1"></span> Sin dato</label>
+      <div class="src" id="ref-barrio"></div>
+    </div>
+
+    <h2 data-collapsed>Filtros</h2>
     <select id="f-depto"><option value="">Departamento: todos</option></select>
     <select id="f-localidad"><option value="">Localidad: todas</option></select>
     <select id="f-barrio"><option value="">Barrio: todos</option></select>
@@ -98,16 +122,25 @@
       <button id="reset-filtro" style="flex:1">↺ Limpiar</button>
     </div>
 
-    <div id="info-barrio"></div>
-
     <h2>Calles · energía eléctrica</h2>
     <label><span class="line" style="border-color:var(--green)"></span> Con red (Sí)</label>
     <label><span class="line" style="border-color:var(--red)"></span> Sin red (No)</label>
 
-    <h2>Usuarios</h2>
+    <h2>Usuarios · filtro por obra</h2>
     <label><input type="radio" name="uf" value="todos" checked> Todos</label>
     <label><input type="radio" name="uf" value="con"> <span class="dot" style="background:var(--green)"></span> Con obra</label>
     <label><input type="radio" name="uf" value="sin"> <span class="dot" style="background:var(--sinobra)"></span> Sin obra</label>
+
+    <h2>Usuarios · color</h2>
+    <label><input type="radio" name="uc" value="consumo" checked> Por consumo (vs mediana)</label>
+    <label><input type="radio" name="uc" value="obra"> Por obra (verde/violeta)</label>
+    <div id="leyenda-consumo">
+      <label><span class="dot" style="background:#d73027"></span> Top 10% que más consume — <b>visitar</b></label>
+      <label><span class="dot" style="background:#fdae61"></span> Arriba de la mediana del barrio</label>
+      <label><span class="dot" style="background:#4575b4"></span> En / por debajo de la mediana</label>
+      <label><span class="dot" style="background:#c9ccd1"></span> Sin dato de consumo</label>
+      <div class="src" id="ref-consumo"></div>
+    </div>
 
     <h2>Tipo de obra</h2>
     <div id="tipos"></div>
@@ -127,7 +160,18 @@
 const OBRAS_URL   = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQ_Pigo6vpR9IaTeD2C5LXrpYdeZFjxierA0VVSrIkDHzHOKQ9honxJJoBWe-ADGXB_7EbAaK4d88fK/pub?output=csv";
 const BARRIOS_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTVXaguldp-dULt8TNEr0985coEztDj0hYM49TSd2HjzW_h497l8a18NtWc11ekQU53ZetYRkWXrZZd/pub?gid=0&single=true&output=csv";
 
-const COL = { green:"#1a9850", red:"#d73027", gray:"#9aa0a6", obra:"#1a9850", sinobra:"#7a1fa2" };
+const COL = { green:"#1a9850", red:"#d73027", gray:"#9aa0a6", obra:"#1a9850", sinobra:"#7a1fa2",
+              cAlto:"#d73027", cArriba:"#fdae61", cAbajo:"#4575b4", cSin:"#c9ccd1" };
+
+/* Referencias de consumo (kWh), calculadas del padrón completo (261.388 usuarios).
+   total = suma de los 12 bimestres (oct-24 a ago-26); 6m = suma de los 3 últimos bimestres.
+   noBP = resto de la concesión (usuarios fuera de barrios populares). */
+const CONS = { G_med_tot:3460, G_med_6m:980, NOBP_med_tot:3355, NOBP_med_6m:859, P90_6m:3390,
+               PNT_kwh_anual:2273 };   // consumo estimado por vivienda sin medidor (pérdida no técnica)
+let modoColorUsuario = "consumo";   // "consumo" | "obra"
+let barrioColorMode  = "normal";    // "normal" | "consumo" | "pnt"
+let consBarrioP90=0, consBarrioMedMed=0;          // umbrales de medianas entre barrios (consumo 6m)
+let pntBarrio={}, pntMediana=0, pntP90=0;          // pérdidas no técnicas = viviendas - usuarios
 
 const map = L.map("map", { preferCanvas:true }).setView([-40.8, -65.0], 7);
 L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
@@ -280,7 +324,17 @@ function popupCalle(f){
     +'<span class="k">Gas:</span> '+si(p.red_gas)+' · <span class="k">Alumbrado:</span> '+si(p.alumbrado)+'<br>'
     +'<span class="k">Asfalto:</span> '+si(p.asfalto)+' · <span class="k">Veredas:</span> '+si(p.veredas)+'</div>';
 }
-function colorUsuario(id){ return obrasByUsua[id]&&obrasByUsua[id].length ? COL.obra : COL.sinobra; }
+function colorUsuario(f){
+  const p=f.properties;
+  if(modoColorUsuario==="consumo"){
+    if(p.c_6m==null) return COL.cSin;
+    if(p.top10) return COL.cAlto;
+    const cb=consBarrio[toIntBarrio(p.id_renabap)], m6=cb?cb.med6m:CONS.G_med_6m;
+    return p.c_6m>m6 ? COL.cArriba : COL.cAbajo;
+  }
+  const id=limpiarId(p.Usua_ID);
+  return obrasByUsua[id]&&obrasByUsua[id].length ? COL.obra : COL.sinobra;
+}
 function popupUsuario(f){
   const p=f.properties, id=limpiarId(p.Usua_ID), b=barriosById[toIntBarrio(p.id_renabap)];
   const barrio=b?(b["nombre del barrio"]||("Barrio "+toIntBarrio(p.id_renabap))):("Barrio "+(toIntBarrio(p.id_renabap)??"-"));
@@ -289,6 +343,7 @@ function popupUsuario(f){
   const dniTxt = (p.DOC_N__!=null && String(p.DOC_N__).trim()!=="") ? '<span class="k">DNI:</span> '+dni(p.DOC_N__)+'<br>' : '';
   let h='<div class="lp"><h3>'+id+'</h3>'+dniTxt
     +'<span class="k">Barrio:</span> '+barrio+'<br><span class="k">Depto:</span> '+depto+' · <span class="k">Localidad:</span> '+loc+'<br>';
+  h += (p.c_6m!=null) ? consBlockUsuario(p) : '<div class="obra"><i>Sin datos de consumo</i></div>';
   if(obras.length){
     h+='<b>'+obras.length+' obra(s):</b>';
     obras.forEach(o=>{ h+='<div class="obra"><b>'+(o.tipo_obra||"-")+'</b> '+estadoPill(o.estado)
@@ -338,6 +393,73 @@ function calcularMtsBarrio(calles){
     val.forEach(id=>{ const m=mtsBarrio[id]||(mtsBarrio[id]={t:0,c:0,s:0}); m.t+=sh; if(esS)m.c+=sh; else m.s+=sh; });
   });
 }
+/* -------- consumo por barrio, calculado en vivo del geojson enriquecido -------- */
+let consBarrio={};
+function mediana(a){ if(!a.length) return null; const s=[...a].sort((x,y)=>x-y); const m=s.length>>1; return s.length%2?s[m]:(s[m-1]+s[m])/2; }
+function percentil(a,p){ if(!a.length) return null; const s=[...a].sort((x,y)=>x-y); const i=(p/100)*(s.length-1),lo=Math.floor(i),hi=Math.ceil(i); return lo===hi?s[lo]:s[lo]+(s[hi]-s[lo])*(i-lo); }
+function calcularConsumoBarrio(){
+  consBarrio={}; const by={};
+  (usuariosData.features||[]).forEach(f=>{
+    const p=f.properties, bid=toIntBarrio(p.id_renabap);
+    if(bid==null || p.c_6m==null) return;
+    (by[bid]=by[bid]||[]).push(p);
+  });
+  for(const bid in by){
+    const arr=by[bid], m6=mediana(arr.map(p=>p.c_6m)), mt=mediana(arr.map(p=>p.c_tot));
+    let arriba=0,abajo=0,top10=0;
+    arr.forEach(p=>{ if(p.c_6m>m6)arriba++; else if(p.c_6m<m6)abajo++; if(p.top10)top10++; });
+    consBarrio[bid]={n:arr.length, med6m:m6, medTot:mt, arriba, abajo, top10};
+  }
+  // umbrales entre barrios (sobre las medianas de 6m de cada barrio)
+  const meds=Object.values(consBarrio).map(c=>c.med6m);
+  consBarrioMedMed=mediana(meds)||0; consBarrioP90=percentil(meds,90)||0;
+}
+/* pérdidas no técnicas por barrio = viviendas - usuarios (del Sheet) */
+function calcularPNT(){
+  pntBarrio={}; const vals=[];
+  for(const id in barriosById){
+    const b=barriosById[id];
+    const viv=parseNum(b["viviendas"]), usu=parseNum(b["Usuarios en el barrio"]);
+    if(viv<=0 && usu<=0) continue;
+    const v=viv-usu; pntBarrio[id]=v; vals.push(v);
+  }
+  pntMediana=mediana(vals)||0; pntP90=percentil(vals,90)||0;
+}
+/* color del polígono de barrio según el modo elegido */
+function colorBarrio(feat){
+  const id=toIntBarrio(feat.properties.Name);
+  if(barrioColorMode==="consumo"){
+    const cb=consBarrio[id]; if(!cb) return COL.cSin;
+    if(cb.med6m>=consBarrioP90) return COL.cAlto;
+    return cb.med6m>consBarrioMedMed ? COL.cArriba : COL.cAbajo;
+  }
+  if(barrioColorMode==="pnt"){
+    const v=pntBarrio[id]; if(v==null) return COL.cSin;
+    if(v>=pntP90) return COL.cAlto;
+    return v>pntMediana ? COL.cArriba : COL.cAbajo;
+  }
+  return "#8856a7";
+}
+function pntTxt(id){
+  const v=pntBarrio[id]; if(v==null) return '';
+  const rel = v>pntMediana?'<b style="color:#d73027">arriba</b>':v<pntMediana?'<b style="color:#4575b4">abajo</b>':'en';
+  const top = v>=pntP90?' <span class="pill" style="background:#d73027">top 10%</span>':'';
+  return '<span class="k">Pérdidas no técnicas (viv−usuarios):</span> '+fmt(v)+' viv.'+top+'<br>'
+    +'<span class="k">Energía no facturada (est.):</span> '+fmt(v*CONS.PNT_kwh_anual)+' kWh/año<br>'
+    +'<span class="k">'+rel+' de la mediana entre barrios ('+fmt(pntMediana)+' viv.)</span><br>';
+}
+function pctVs(val,ref){ return ref? Math.round(100*val/ref) : 0; }
+function consBlockUsuario(p){
+  const bid=toIntBarrio(p.id_renabap), cb=consBarrio[bid];
+  const m6=cb?cb.med6m:CONS.G_med_6m;
+  const rel = p.c_6m>m6?'<b style="color:#d73027">por encima</b>' : p.c_6m<m6?'<b style="color:#4575b4">por debajo</b>' : 'en';
+  const badge = p.top10? ' <span class="pill" style="background:#d73027">TOP 10% · visitar</span>' : '';
+  return '<div class="obra"><b>Consumo'+badge+'</b><br>'
+    +'<span class="k">Últimos 6 meses:</span> '+fmt(p.c_6m)+' kWh<br>'
+    +'<span class="k">Total (12 bim.):</span> '+fmt(p.c_tot)+' kWh<br>'
+    +'<span class="k">Está '+rel+' de la mediana del barrio</span> ('+fmt(m6)+' kWh 6m)<br>'
+    +'<span class="k">vs. mediana no-BP (6m '+fmt(CONS.NOBP_med_6m)+'):</span> '+pctVs(p.c_6m,CONS.NOBP_med_6m)+'%</div>';
+}
 function popupBarrio(f){
   const id=toIntBarrio(f.properties.Name), b=barriosById[id];
   const nombre = b?(b["nombre del barrio"]||("Barrio "+id)) : (f.properties.nombre_bar||("Barrio "+id));
@@ -350,7 +472,19 @@ function popupBarrio(f){
     +'<span class="k">Mts con red:</span> '+fmt(con)+' ('+pct.toFixed(0)+'%)<br>'
     +'<span class="k">Mts sin red:</span> '+fmt(_m.s)+'<br>'
     +'<span class="k">Viviendas:</span> '+fmt(parseNum(b["viviendas"]))+' · <span class="k">sin red:</span> '+fmt(parseNum(b["viviendas sin red"]))+'<br>'
-    +'<span class="k">Usuarios:</span> '+fmt(parseNum(b["Usuarios en el barrio"]))+' · <span class="k">sin medidor:</span> '+fmt(parseNum(b["Usuarios sin medidor en el barrio"]))+'</div>';
+    +'<span class="k">Usuarios:</span> '+fmt(parseNum(b["Usuarios en el barrio"]))+' · <span class="k">sin medidor:</span> '+fmt(parseNum(b["Usuarios sin medidor en el barrio"]))+'<br>'
+    + pntTxt(id)
+    +'</div>'
+    + consBlockBarrio(id);
+}
+function consBlockBarrio(id){
+  const cb=consBarrio[id];
+  if(!cb) return '<div class="obra"><span class="k">Sin datos de consumo</span></div>';
+  return '<div class="obra"><b>Consumo (mediana del barrio)</b><br>'
+    +'<span class="k">Últimos 6 meses:</span> '+fmt(cb.med6m)+' kWh · <span class="k">vs no-BP:</span> '+pctVs(cb.med6m,CONS.NOBP_med_6m)+'%<br>'
+    +'<span class="k">Total (12 bim.):</span> '+fmt(cb.medTot)+' kWh · <span class="k">vs no-BP:</span> '+pctVs(cb.medTot,CONS.NOBP_med_tot)+'%<br>'
+    +'<span class="k">Usuarios con dato:</span> '+fmt(cb.n)+' · <span class="k">↑</span> '+fmt(cb.arriba)+' · <span class="k">↓</span> '+fmt(cb.abajo)+'<br>'
+    +'<span class="k" style="color:#d73027">Top 10% (visitar):</span> <b>'+fmt(cb.top10)+'</b></div>';
 }
 function clickInfo(contentFn){
   return function(ev){
@@ -384,9 +518,10 @@ function barrioEnPunto(ll){
 
 function construirUsuarios(){
   if(usuariosLayer) usuariosLayer.remove();
+  calcularConsumoBarrio();
   usuariosLayer = L.geoJSON(usuariosData, {
     renderer:canvas,
-    pointToLayer:(f,ll)=>L.circleMarker(ll,{renderer:canvas,radius:6,color:"#fff",weight:1,fillColor:colorUsuario(limpiarId(f.properties.Usua_ID)),fillOpacity:0.95}),
+    pointToLayer:(f,ll)=>L.circleMarker(ll,{renderer:canvas,radius:6,color:"#fff",weight:1,fillColor:colorUsuario(f),fillOpacity:0.95}),
     onEachFeature:(f,l)=>l.on("click", clickInfo(popupUsuario))
   }).addTo(map);
   actualizarResumen();
@@ -410,11 +545,11 @@ function aplicarFiltros(){
   const filtro=hayFiltro();
   let visibles=0;
   if(usuariosLayer) usuariosLayer.eachLayer(lyr=>{
-    const p=lyr.feature.properties, id=limpiarId(p.Usua_ID);
+    const p=lyr.feature.properties;
     const enSector = !filtro || barriosActivos.has(toIntBarrio(p.id_renabap));
     const vis = enSector && pasaObra(p);
     if(vis) visibles++;
-    lyr.setStyle({fillColor:colorUsuario(id), opacity:vis?1:0, fillOpacity:vis?0.95:0});
+    lyr.setStyle({fillColor:colorUsuario(lyr.feature), opacity:vis?1:0, fillOpacity:vis?0.95:0});
     lyr.setRadius(vis?6:0);
   });
   if(callesLayer) callesLayer.eachLayer(lyr=>{
@@ -425,7 +560,8 @@ function aplicarFiltros(){
   if(barriosLayer) barriosLayer.eachLayer(lyr=>{
     const nid=toIntBarrio(lyr.feature.properties.Name);
     const vis = !filtro || barriosActivos.has(nid);
-    lyr.setStyle({opacity:vis?1:0, fillOpacity:vis?0.12:0});
+    const col=colorBarrio(lyr.feature), fo = barrioColorMode==="normal"?0.12:0.5;
+    lyr.setStyle({color:col, fillColor:col, opacity:vis?1:0, fillOpacity:vis?fo:0});
   });
   document.getElementById("st-visibles").textContent=visibles.toLocaleString("es-AR");
   actualizarInfoBarrio(visibles);
@@ -443,6 +579,12 @@ function actualizarInfoBarrio(usuariosVisibles){
     S.usu+=parseNum(b["Usuarios en el barrio"]); S.usuSM+=parseNum(b["Usuarios sin medidor en el barrio"]);
   });
   const pctRed = S.mts>0 ? (100*S.mtsCon/S.mts) : 0;
+  // consumo pooled de los barrios seleccionados
+  const idset=new Set(ids), c6=[]; let cTop10=0;
+  (usuariosData.features||[]).forEach(f=>{ const p=f.properties;
+    if(p.c_6m==null) return; if(!idset.has(toIntBarrio(p.id_renabap))) return;
+    c6.push(p.c_6m); if(p.top10) cTop10++; });
+  const cMed6=mediana(c6);
   let titulo, sub="";
   if(ids.length===1){
     const b=barriosById[ids[0]];
@@ -462,16 +604,38 @@ function actualizarInfoBarrio(usuariosVisibles){
     +'<tr><td class="k">Viviendas sin red</td><td class="v">'+fmt(S.vivSR)+'</td></tr>'
     +'<tr><td class="k">Usuarios en el barrio</td><td class="v">'+fmt(S.usu)+'</td></tr>'
     +'<tr><td class="k">Usuarios sin medidor</td><td class="v">'+fmt(S.usuSM)+'</td></tr>'
+    +'<tr><td class="k">Pérdidas no técnicas (viv sin medidor)</td><td class="v">'+fmt(S.viv-S.usu)+' viv.</td></tr>'
+    +'<tr><td class="k">— energía no facturada (est.)</td><td class="v">'+fmt((S.viv-S.usu)*CONS.PNT_kwh_anual)+' kWh/año</td></tr>'
     +'<tr><td class="k">Usuarios visibles (mapa)</td><td class="v">'+fmt(usuariosVisibles)+'</td></tr>'
+    +(cMed6!=null?(
+       '<tr><td class="k">Mediana consumo 6m</td><td class="v">'+fmt(cMed6)+' kWh ('+pctVs(cMed6,CONS.NOBP_med_6m)+'% vs no-BP)</td></tr>'
+      +'<tr><td class="k" style="color:#d73027">Top 10% (visitar)</td><td class="v">'+fmt(cTop10)+'</td></tr>'
+     ):'')
     +'</table>';
   cont.style.display="block";
 }
 
 function actualizarResumen(){
-  let con=0;
-  usuariosData.features.forEach(f=>{ const id=limpiarId(f.properties.Usua_ID); if(obrasByUsua[id]&&obrasByUsua[id].length) con++; });
+  let con=0, top10=0;
+  usuariosData.features.forEach(f=>{ const id=limpiarId(f.properties.Usua_ID);
+    if(obrasByUsua[id]&&obrasByUsua[id].length) con++;
+    if(f.properties.top10) top10++; });
   document.getElementById("st-usuarios").textContent=usuariosData.features.length.toLocaleString("es-AR");
   document.getElementById("st-conobra").textContent=con.toLocaleString("es-AR");
+  document.getElementById("st-med6m").textContent=fmt(CONS.G_med_6m);
+  document.getElementById("st-top10").textContent=top10.toLocaleString("es-AR");
+  document.getElementById("st-umbral").textContent="≥ "+fmt(CONS.P90_6m)+" kWh";
+}
+/* -------- secciones plegables de la barra lateral -------- */
+function initColapsables(){
+  document.querySelectorAll('#side h2').forEach(h=>{
+    const body=document.createElement('div'); body.className='sec-body';
+    let n=h.nextElementSibling;
+    while(n && n.tagName!=='H2'){ const nx=n.nextElementSibling; body.appendChild(n); n=nx; }
+    h.after(body); h.classList.add('sec-h');
+    h.addEventListener('click',()=>{ h.classList.toggle('collapsed'); body.style.display=h.classList.contains('collapsed')?'none':''; });
+    if(h.hasAttribute('data-collapsed')){ h.classList.add('collapsed'); body.style.display='none'; }
+  });
 }
 
 /* -------- zoom al sector -------- */
@@ -513,16 +677,40 @@ async function init(){
                  onEachFeature:(f,l)=>l.on("click", clickInfo(popupCalle))}).addTo(map);
 
   await cargarBarrios();
-  callesData=calles; calcularMtsBarrio(calles);
+  callesData=calles; calcularMtsBarrio(calles); calcularPNT();
   await cargarObras();
   poblarUbicacion();
   construirUsuarios();
+  initColapsables();
   try{ map.fitBounds(barriosLayer.getBounds(),{padding:[20,20]}); }catch(e){}
 
   bindToggle("lyr-barrios",()=>barriosLayer);
   bindToggle("lyr-calles",()=>callesLayer);
   bindToggle("lyr-usuarios",()=>usuariosLayer);
   document.querySelectorAll('input[name="uf"]').forEach(r=>r.addEventListener("change",aplicarFiltros));
+  // selector de color de usuarios (consumo / obra)
+  document.getElementById("ref-consumo").innerHTML =
+    'Mediana BP: 6m '+fmt(CONS.G_med_6m)+' · total '+fmt(CONS.G_med_tot)+' kWh<br>'
+    +'Mediana no-BP: 6m '+fmt(CONS.NOBP_med_6m)+' · total '+fmt(CONS.NOBP_med_tot)+' kWh<br>'
+    +'Umbral top 10% (6m): ≥ '+fmt(CONS.P90_6m)+' kWh';
+  document.querySelectorAll('input[name="uc"]').forEach(r=>r.addEventListener("change",e=>{
+    modoColorUsuario=e.target.value;
+    document.getElementById("leyenda-consumo").style.display = modoColorUsuario==="consumo"?"block":"none";
+    aplicarFiltros();
+  }));
+  // selector de color de barrios (normal / consumo / pérdidas no técnicas)
+  document.getElementById("bcolor").addEventListener("change",e=>{
+    barrioColorMode=e.target.value;
+    const leg=document.getElementById("leyenda-barrio"), ref=document.getElementById("ref-barrio");
+    if(barrioColorMode==="normal"){ leg.style.display="none"; }
+    else{
+      leg.style.display="block";
+      ref.innerHTML = barrioColorMode==="consumo"
+        ? 'Top 10% de barrios: mediana 6m ≥ '+fmt(consBarrioP90)+' kWh<br>Mediana entre barrios: '+fmt(consBarrioMedMed)+' kWh'
+        : 'Pérdida no técnica = viviendas sin medidor<br>Energía est.: × '+fmt(CONS.PNT_kwh_anual)+' kWh/año c/u<br>Top 10%: ≥ '+fmt(pntP90)+' viv.<br>Mediana entre barrios: '+fmt(pntMediana)+' viv.';
+    }
+    aplicarFiltros();
+  });
   document.getElementById("f-depto").addEventListener("change",()=>{ poblarUbicacion(); aplicarFiltros(); });
   document.getElementById("f-localidad").addEventListener("change",()=>{ poblarUbicacion(); aplicarFiltros(); });
   document.getElementById("f-barrio").addEventListener("change",aplicarFiltros);
@@ -533,7 +721,7 @@ async function init(){
     ["f-depto","f-localidad","f-barrio","f-tipo","f-pase"].forEach(i=>document.getElementById(i).value="");
     poblarUbicacion(); aplicarFiltros();
   });
-  document.getElementById("refresh").addEventListener("click",async()=>{ await cargarBarrios(); calcularMtsBarrio(callesData); await cargarObras(); poblarUbicacion(); construirUsuarios(); });
+  document.getElementById("refresh").addEventListener("click",async()=>{ await cargarBarrios(); calcularMtsBarrio(callesData); calcularPNT(); await cargarObras(); poblarUbicacion(); construirUsuarios(); });
   document.getElementById("t-mover").addEventListener("click",()=>setModo(false));
   document.getElementById("t-info").addEventListener("click",()=>setModo(true));
   setModo(true);
