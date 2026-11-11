@@ -76,7 +76,7 @@
     </div>
     <div class="stats" style="margin-top:6px">
       <div class="stat"><b id="st-med6m">–</b><span id="st-med-label">mediana (BP)</span></div>
-      <div class="stat"><b id="st-top10" style="color:#d73027">–</b><span>top 10% · <span id="st-umbral">–</span></span></div>
+      <div class="stat"><b id="st-top10" style="color:#d73027">–</b><span>críticos · <span id="st-umbral">–</span></span></div>
     </div>
     <select id="ventana" style="margin-top:6px">
       <option value="1b">Ventana: último bimestre</option>
@@ -93,10 +93,12 @@
     <label><input type="checkbox" id="lyr-usuarios" checked> <span class="dot" style="background:var(--sinobra)"></span> Usuarios</label>
 
     <h2 data-layer="usuarios">Usuarios · color</h2>
-    <label><input type="radio" name="uc" value="consumo" checked> Por consumo (vs mediana)</label>
-    <label><input type="radio" name="uc" value="obra"> Por obra (verde/violeta)</label>
+    <select id="ucolor">
+      <option value="consumo" selected>Por consumo</option>
+      <option value="obra">Por obra (verde/violeta)</option>
+    </select>
     <div id="leyenda-consumo">
-      <label><span class="dot" style="background:#d73027"></span> Top 10% que más consume — <b>visitar</b></label>
+      <label><span class="dot" style="background:#d73027"></span> Consumo crítico — <b>visitar</b></label>
       <label><span class="dot" style="background:#fdae61"></span> Arriba de la mediana del barrio</label>
       <label><span class="dot" style="background:#4575b4"></span> En / por debajo de la mediana</label>
       <label><span class="dot" style="background:#c9ccd1"></span> Sin dato de consumo</label>
@@ -105,9 +107,9 @@
 
     <h2 data-layer="barrios">Barrios · color</h2>
     <select id="bcolor">
-      <option value="normal">Normal (violeta)</option>
-      <option value="consumo">Consumo — top 10% de barrios en rojo</option>
-      <option value="pnt">Pérdidas no técnicas — top 10% en rojo</option>
+      <option value="normal">Sin análisis</option>
+      <option value="consumo">Por consumo</option>
+      <option value="pnt">Por PNT</option>
     </select>
     <div id="leyenda-barrio" style="display:none">
       <label><span class="swatch" style="background:#d73027"></span> Top 10% de barrios</label>
@@ -143,8 +145,8 @@
       <button id="reset-filtro" style="flex:1">↺ Limpiar</button>
     </div>
 
-    <h2>Obras</h2>
-    <div data-layer="usuarios">
+    <h2 data-layer="usuarios">Usuarios · obras</h2>
+    <div>
       <div class="k" style="font-size:11px;margin:2px 0 4px">Filtrar usuarios por obra</div>
       <label><input type="radio" name="uf" value="todos" checked> Todos</label>
       <label><input type="radio" name="uf" value="con"> <span class="dot" style="background:var(--green)"></span> Con obra</label>
@@ -172,18 +174,20 @@ const COL = { green:"#1a9850", red:"#d73027", gray:"#9aa0a6", obra:"#1a9850", si
 /* Referencias de consumo (kWh), calculadas del padrón completo (261.388 usuarios).
    total = suma de los 12 bimestres (oct-24 a ago-26); 6m = suma de los 3 últimos bimestres.
    noBP = resto de la concesión (usuarios fuera de barrios populares). */
-const CONS = { PNT_kwh_anual:2273 };   // consumo estimado por vivienda sin medidor (pérdida no técnica)
-/* Ventanas de consumo. field = campo del geojson; nobp = mediana del resto (no-BP) de esa ventana. */
+const CONS = { PNT_kwh_anual:2273, CRIT_kwh_bim:1000 };   // PNT_kwh_anual: consumo/vivienda sin medidor · CRIT: umbral de consumo crítico por bimestre
+/* Ventanas de consumo. field=campo del geojson; nbim=bimestres que abarca; nobp=mediana del resto (sin ceros). */
 const VENTANAS = {
-  "1b":  {label:"Último bimestre", field:"c_1b",  nobp:266},
-  "6m":  {label:"Últimos 6 meses", field:"c_6m",  nobp:859},
-  "12m": {label:"Último año",      field:"c_12m", nobp:1727},
-  "tot": {label:"Total (2 años)",  field:"c_tot", nobp:3355},
+  "1b":  {label:"Último bimestre", field:"c_1b",  nbim:1,  nobp:276},
+  "6m":  {label:"Últimos 6 meses", field:"c_6m",  nbim:3,  nobp:877},
+  "12m": {label:"Último año",      field:"c_12m", nbim:6,  nobp:1752},
+  "tot": {label:"Total (2 años)",  field:"c_tot", nbim:12, nobp:3386},
 };
 let ventana = "6m";                 // ventana activa
 function winField(){ return VENTANAS[ventana].field; }
-function cu(p){ const v=p[winField()]; return (v==null)?null:v; }   // consumo del usuario en la ventana activa
+/* consumo del usuario en la ventana activa; 0 (o faltante) = sin dato -> null */
+function cu(p){ const v=p[winField()]; return (v==null || v<=0)?null:v; }
 function nobpMed(){ return VENTANAS[ventana].nobp; }
+function critUmbral(){ return CONS.CRIT_kwh_bim * VENTANAS[ventana].nbim; }   // crítico de la ventana = 1.000 × nº bimestres
 let modoColorUsuario = "consumo";   // "consumo" | "obra"
 let barrioColorMode  = "normal";    // "normal" | "consumo" | "pnt"
 const DATA_VER = "20261111d";       // anti-caché de los geojson: cambiar al re-generar datos
@@ -346,7 +350,7 @@ function colorUsuario(f){
   const p=f.properties;
   if(modoColorUsuario==="consumo"){
     const v=cu(p); if(v==null) return COL.cSin;
-    if(v>=G_p90) return COL.cAlto;
+    if(v>=critUmbral()) return COL.cAlto;          // consumo crítico (≥1.000 kWh/bim)
     const cb=consBarrio[toIntBarrio(p.id_renabap)], m=cb?cb.med:G_med;
     return v>m ? COL.cArriba : COL.cAbajo;
   }
@@ -416,17 +420,17 @@ let consBarrio={};
 function mediana(a){ if(!a.length) return null; const s=[...a].sort((x,y)=>x-y); const m=s.length>>1; return s.length%2?s[m]:(s[m-1]+s[m])/2; }
 function percentil(a,p){ if(!a.length) return null; const s=[...a].sort((x,y)=>x-y); const i=(p/100)*(s.length-1),lo=Math.floor(i),hi=Math.ceil(i); return lo===hi?s[lo]:s[lo]+(s[hi]-s[lo])*(i-lo); }
 function recalcConsumo(){
-  const fld=winField(); consBarrio={}; const all=[], by={};
+  const fld=winField(), crit=critUmbral(); consBarrio={}; const all=[], by={};
   (usuariosData.features||[]).forEach(f=>{
-    const p=f.properties, v=p[fld]; if(v==null) return;
+    const p=f.properties, v=p[fld]; if(v==null || v<=0) return;   // 0 = sin dato, fuera de medianas
     all.push(v); const bid=toIntBarrio(p.id_renabap);
     if(bid!=null)(by[bid]=by[bid]||[]).push(v);
   });
   G_med=mediana(all)||0; G_p90=percentil(all,90)||0;
   for(const bid in by){
-    const arr=by[bid], m=mediana(arr); let arriba=0,abajo=0,top10=0;
-    arr.forEach(v=>{ if(v>m)arriba++; else if(v<m)abajo++; if(v>=G_p90)top10++; });
-    consBarrio[bid]={n:arr.length, med:m, arriba, abajo, top10};
+    const arr=by[bid], m=mediana(arr); let arriba=0,abajo=0,criticos=0;
+    arr.forEach(v=>{ if(v>m)arriba++; else if(v<m)abajo++; if(v>=crit)criticos++; });
+    consBarrio[bid]={n:arr.length, med:m, arriba, abajo, crit:criticos};
   }
   const meds=Object.values(consBarrio).map(c=>c.med);
   consBarrioMedMed=mediana(meds)||0; consBarrioP90=percentil(meds,90)||0;
@@ -461,23 +465,23 @@ function pntTxt(id){
   const v=pntBarrio[id]; if(v==null) return '';
   const rel = v>pntMediana?'<b style="color:#d73027">arriba</b>':v<pntMediana?'<b style="color:#4575b4">abajo</b>':'en';
   const top = v>=pntP90?' <span class="pill" style="background:#d73027">top 10%</span>':'';
-  return '<span class="k">Pérdidas no técnicas (viv−usuarios):</span> '+fmt(v)+' viv.'+top+'<br>'
-    +'<span class="k">Energía no facturada (est.):</span> '+fmt(v*CONS.PNT_kwh_anual)+' kWh/año<br>'
-    +'<span class="k">'+rel+' de la mediana entre barrios ('+fmt(pntMediana)+' viv.)</span><br>';
+  return '<span class="k">Potenciales usuarios (viv. sin medidor):</span> '+fmt(v)+top+'<br>'
+    +'<span class="k">Pérdida no técnica est. (energía):</span> '+fmt(v*CONS.PNT_kwh_anual)+' kWh/año<br>'
+    +'<span class="k">'+rel+' de la mediana entre barrios ('+fmt(pntMediana)+')</span><br>';
 }
 function pctVs(val,ref){ return ref? Math.round(100*val/ref) : 0; }
 function consBlockUsuario(p){
-  if(p.c_tot==null) return '<div class="obra"><i>Sin datos de consumo</i></div>';
+  if(p.c_tot==null || p.c_tot<=0) return '<div class="obra"><i>Sin datos de consumo</i></div>';
   const v=cu(p), bid=toIntBarrio(p.id_renabap), cb=consBarrio[bid], m=cb?cb.med:G_med;
-  const badge = (v!=null && v>=G_p90)? ' <span class="pill" style="background:#d73027">TOP 10% · visitar</span>' : '';
+  const badge = (v!=null && v>=critUmbral())? ' <span class="pill" style="background:#d73027">CRÍTICO · visitar</span>' : '';
   const rel = v==null?'' : (v>m?'<b style="color:#d73027">por encima</b>':v<m?'<b style="color:#4575b4">por debajo</b>':'en');
-  const L=(lbl,val,act)=>'<span class="k">'+(act?'▸ ':'')+lbl+':</span> '+(val==null?'–':fmt(val)+' kWh');
+  const L=(lbl,val,act)=>'<span class="k">'+(act?'▸ ':'')+lbl+':</span> '+((val==null||val<=0)?'sin dato':fmt(val)+' kWh');
   return '<div class="obra"><b>Consumo'+badge+'</b><br>'
     + L('Último bimestre',p.c_1b,ventana==='1b')+'<br>'
     + L('Últimos 6 meses',p.c_6m,ventana==='6m')+'<br>'
     + L('Último año',p.c_12m,ventana==='12m')+'<br>'
     + L('Total (2 años)',p.c_tot,ventana==='tot')+'<br>'
-    + (v!=null?'<span class="k">En «'+VENTANAS[ventana].label+'» está '+rel+' de la mediana del barrio ('+fmt(m)+') · vs no-BP '+pctVs(v,nobpMed())+'%</span>':'')
+    + (v!=null?'<span class="k">En «'+VENTANAS[ventana].label+'» está '+rel+' de la mediana del barrio ('+fmt(m)+') · vs no-BP '+pctVs(v,nobpMed())+'%</span>':'<span class="k">Sin dato en esta ventana</span>')
     +'</div>';
 }
 function popupBarrio(f){
@@ -500,7 +504,7 @@ function popupBarrio(f){
 function consBlockBarrio(id){
   const vals={c_1b:[],c_6m:[],c_12m:[],c_tot:[]};
   (usuariosData.features||[]).forEach(f=>{ const p=f.properties; if(toIntBarrio(p.id_renabap)!==id) return;
-    for(const k in vals){ if(p[k]!=null) vals[k].push(p[k]); } });
+    for(const k in vals){ if(p[k]!=null && p[k]>0) vals[k].push(p[k]); } });   // 0 = sin dato
   if(!vals.c_tot.length) return '<div class="obra"><span class="k">Sin datos de consumo</span></div>';
   const cb=consBarrio[id];
   const L=(lbl,arr,nobp,act)=>{ const md=mediana(arr);
@@ -511,7 +515,7 @@ function consBlockBarrio(id){
     + L('Último año',vals.c_12m,VENTANAS["12m"].nobp,ventana==='12m')+'<br>'
     + L('Total (2 años)',vals.c_tot,VENTANAS["tot"].nobp,ventana==='tot')+'<br>'
     +'<span class="k">Usuarios con dato:</span> '+fmt(vals.c_tot.length)
-    + (cb?' · <span class="k" style="color:#d73027">Top 10% ('+VENTANAS[ventana].label+'):</span> <b>'+fmt(cb.top10)+'</b>':'')
+    + (cb?' · <span class="k" style="color:#d73027">Críticos (≥'+fmt(critUmbral())+' en '+VENTANAS[ventana].label+'):</span> <b>'+fmt(cb.crit)+'</b>':'')
     +'</div>';
 }
 function clickInfo(contentFn){
@@ -608,11 +612,11 @@ function actualizarInfoBarrio(usuariosVisibles){
   });
   const pctRed = S.mts>0 ? (100*S.mtsCon/S.mts) : 0;
   // consumo pooled de los barrios seleccionados (ventana activa)
-  const idset=new Set(ids), c6=[]; let cTop10=0;
+  const idset=new Set(ids), c6=[], crit=critUmbral(); let cCrit=0;
   (usuariosData.features||[]).forEach(f=>{ const p=f.properties;
     if(!idset.has(toIntBarrio(p.id_renabap))) return;
     const v=cu(p); if(v==null) return;
-    c6.push(v); if(v>=G_p90) cTop10++; });
+    c6.push(v); if(v>=crit) cCrit++; });
   const cMed6=mediana(c6);
   let titulo, sub="";
   if(ids.length===1){
@@ -633,33 +637,33 @@ function actualizarInfoBarrio(usuariosVisibles){
     +'<tr><td class="k">Viviendas sin red</td><td class="v">'+fmt(S.vivSR)+'</td></tr>'
     +'<tr><td class="k">Usuarios en el barrio</td><td class="v">'+fmt(S.usu)+'</td></tr>'
     +'<tr><td class="k">Usuarios sin medidor</td><td class="v">'+fmt(S.usuSM)+'</td></tr>'
-    +'<tr><td class="k">Pérdidas no técnicas (viv sin medidor)</td><td class="v">'+fmt(S.viv-S.usu)+' viv.</td></tr>'
-    +'<tr><td class="k">— energía no facturada (est.)</td><td class="v">'+fmt((S.viv-S.usu)*CONS.PNT_kwh_anual)+' kWh/año</td></tr>'
+    +'<tr><td class="k">Potenciales usuarios (viv. sin medidor)</td><td class="v">'+fmt(S.viv-S.usu)+'</td></tr>'
+    +'<tr><td class="k">— pérdida no técnica est.</td><td class="v">'+fmt((S.viv-S.usu)*CONS.PNT_kwh_anual)+' kWh/año</td></tr>'
     +'<tr><td class="k">Usuarios visibles (mapa)</td><td class="v">'+fmt(usuariosVisibles)+'</td></tr>'
     +(cMed6!=null?(
        '<tr><td class="k">Mediana consumo · '+VENTANAS[ventana].label+'</td><td class="v">'+fmt(cMed6)+' kWh ('+pctVs(cMed6,nobpMed())+'% vs no-BP)</td></tr>'
-      +'<tr><td class="k" style="color:#d73027">Top 10% (visitar)</td><td class="v">'+fmt(cTop10)+'</td></tr>'
+      +'<tr><td class="k" style="color:#d73027">Críticos ≥'+fmt(critUmbral())+' (visitar)</td><td class="v">'+fmt(cCrit)+'</td></tr>'
      ):'')
     +'</table>';
   cont.style.display="block";
 }
 
 function actualizarResumen(){
-  let con=0, top10=0;
+  let con=0, crit=0; const uc=critUmbral();
   usuariosData.features.forEach(f=>{ const p=f.properties, id=limpiarId(p.Usua_ID);
     if(obrasByUsua[id]&&obrasByUsua[id].length) con++;
-    const v=cu(p); if(v!=null && v>=G_p90) top10++; });
+    const v=cu(p); if(v!=null && v>=uc) crit++; });
   document.getElementById("st-usuarios").textContent=usuariosData.features.length.toLocaleString("es-AR");
   document.getElementById("st-conobra").textContent=con.toLocaleString("es-AR");
   document.getElementById("st-med6m").textContent=fmt(G_med);
   document.getElementById("st-med-label").textContent="mediana "+VENTANAS[ventana].label+" (BP)";
-  document.getElementById("st-top10").textContent=top10.toLocaleString("es-AR");
-  document.getElementById("st-umbral").textContent="≥ "+fmt(G_p90)+" kWh";
+  document.getElementById("st-top10").textContent=crit.toLocaleString("es-AR");
+  document.getElementById("st-umbral").textContent="≥ "+fmt(uc)+" kWh";
 }
 function actualizarRefConsumo(){
   const el=document.getElementById("ref-consumo"); if(!el) return;
   el.innerHTML = 'Mediana '+VENTANAS[ventana].label+': BP '+fmt(G_med)+' · no-BP '+fmt(nobpMed())+' kWh<br>'
-    +'Umbral top 10%: ≥ '+fmt(G_p90)+' kWh';
+    +'Crítico (rojo): ≥ '+fmt(critUmbral())+' kWh ('+VENTANAS[ventana].nbim+' bim × 1.000)';
 }
 function actualizarRefBarrio(){
   const ref=document.getElementById("ref-barrio");
@@ -755,11 +759,11 @@ async function init(){
   actualizarRefConsumo();
   document.getElementById("ventana").addEventListener("change",e=>{ ventana=e.target.value; aplicarVentana(); });
   // selector de color de usuarios (consumo / obra)
-  document.querySelectorAll('input[name="uc"]').forEach(r=>r.addEventListener("change",e=>{
+  document.getElementById("ucolor").addEventListener("change",e=>{
     modoColorUsuario=e.target.value;
     document.getElementById("leyenda-consumo").style.display = modoColorUsuario==="consumo"?"block":"none";
     aplicarFiltros();
-  }));
+  });
   // selector de color de barrios (normal / consumo / pérdidas no técnicas)
   document.getElementById("bcolor").addEventListener("change",e=>{
     barrioColorMode=e.target.value;
